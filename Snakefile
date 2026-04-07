@@ -114,8 +114,6 @@ rule merge_stats:
         hrs=config["resources"]["merge_stats"]["hrs"],
     conda:
         "envs/kinnex_stats.yaml"
-    envmodules:
-        "python/3.11",
     run:
         import csv, os
 
