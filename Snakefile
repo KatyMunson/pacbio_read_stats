@@ -17,6 +17,8 @@
 
 import os
 
+configfile: "config.yaml"
+
 # ---------------------------------------------------------------------------
 # Wildcard constraints
 # ---------------------------------------------------------------------------
@@ -66,14 +68,14 @@ rule all:
 rule kinnex_stats:
     input:
         bams=lambda wc: BAMS[wc.sample],
-        script=config["stats_script"],
     output:
-        csv=temp("results/per_sample/{sample}.stats.csv"),
+        csv="results/per_sample/{sample}.stats.csv",
     log:
         "results/logs/{sample}/kinnex_stats.log",
     params:
         min_length=config.get("min_length", 0),
         bam_args=lambda wc: " ".join(BAMS[wc.sample]),
+        script=config["stats_script"],
     threads: config["resources"]["kinnex_stats"]["threads"]
     resources:
         mem=lambda wildcards, attempt: config["resources"]["kinnex_stats"]["mem"] * attempt,
@@ -85,7 +87,7 @@ rule kinnex_stats:
         "pysam/0.22",
     shell:
         """
-        python {input.script} \
+        python {params.script} \
             --bams {params.bam_args} \
             --sample {wildcards.sample} \
             --workers {threads} \
@@ -110,10 +112,6 @@ rule merge_stats:
     resources:
         mem=lambda wildcards, attempt: config["resources"]["merge_stats"]["mem"] * attempt,
         hrs=config["resources"]["merge_stats"]["hrs"],
-    conda:
-        "envs/kinnex_stats.yaml"
-    envmodules:
-        "python/3.11",
     run:
         import csv, os
 
