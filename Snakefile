@@ -112,8 +112,6 @@ rule merge_stats:
     resources:
         mem=lambda wildcards, attempt: config["resources"]["merge_stats"]["mem"] * attempt,
         hrs=config["resources"]["merge_stats"]["hrs"],
-    conda:
-        "envs/kinnex_stats.yaml"
     run:
         import csv, os
 
