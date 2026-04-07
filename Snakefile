@@ -70,7 +70,7 @@ rule kinnex_stats:
         bams=lambda wc: BAMS[wc.sample],
         script=config["stats_script"],
     output:
-        csv=temp("results/per_sample/{sample}.stats.csv"),
+        csv="results/per_sample/{sample}.stats.csv",
     log:
         "results/logs/{sample}/kinnex_stats.log",
     params:
