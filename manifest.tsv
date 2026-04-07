@@ -1,0 +1,7 @@
+# manifest.tsv — Kinnex FLNC Stats
+# Columns: sample <TAB> semicolon-delimited BAM paths
+# Lines starting with '#' are ignored.
+#
+sample1	/path/to/sample1_cell1.flnc.bam
+sample2	/path/to/sample2_cell1.flnc.bam;/path/to/sample2_cell2.flnc.bam
+sample3	/path/to/sample3_cell1.flnc.bam;/path/to/sample3_cell2.flnc.bam;/path/to/sample3_cell3.flnc.bam
