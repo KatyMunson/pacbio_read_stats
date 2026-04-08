@@ -31,7 +31,7 @@ wildcard_constraints:
 SAMPLES = []
 BAMS    = {}   # sample -> list of bam paths
 
-with open(config["manifest"]) as fh:
+with open(config["manifest"], encoding="latin-1") as fh:
     for lineno, line in enumerate(fh, 1):
         line = line.strip()
         if not line or line.startswith("#"):
