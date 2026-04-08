@@ -1,7 +1,7 @@
 # =============================================================================
-# Snakefile — Kinnex FLNC Stats (multi-BAM-per-sample)
+# Snakefile - Kinnex FLNC Stats (multi-BAM-per-sample)
 #
-# Each sample may have 1–N BAMs (e.g. multiple SMRT cells). All BAMs for a
+# Each sample may have 1-N BAMs (e.g. multiple SMRT cells). All BAMs for a
 # sample are streamed and pooled in a single SGE job before stats are computed.
 # No merged BAMs or intermediate FASTQ files are written.
 #
