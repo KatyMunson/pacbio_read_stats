@@ -119,6 +119,9 @@ def collect_reads(bam_path: str, min_length: int = 0) -> Tuple[List[int], List[f
     try:
         with pysam.AlignmentFile(bam_path, "rb", check_sq=False) as bam:
             for read in bam:
+                # Skip secondary and supplementary; keep primary + unmapped
+                if read.is_secondary or read.is_supplementary:
+                    continue
                 qlen = read.query_length
                 if qlen is None:
                     seq = read.query_sequence
