@@ -36,11 +36,11 @@ import argparse
 import csv
 import os
 import platform
-import resource
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from itertools import product
 from pathlib import Path
@@ -60,13 +60,46 @@ DEFAULT_WORKERS_LIST = [1, 2, 4, 8]
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _rss_scale() -> float:
-    """ru_maxrss is in KB on Linux, bytes on macOS. Return divisor to get KB."""
-    return 1024.0 if platform.system() == "Darwin" else 1.0
+def _poll_rss_kb(pid: int, interval: float, result: list, stop: threading.Event) -> None:
+    """
+    Background thread: poll /proc/<pid>/status for VmRSS every `interval` seconds.
+    Records the peak value in result[0]. Stops when the process exits or stop is set.
+
+    VmRSS covers the main process RSS. The ProcessPoolExecutor workers are separate
+    processes; their memory is not included here, but the dominant cost — the pooled
+    all_lengths and all_qualities lists — lives in the main process after workers return.
+    """
+    peak_kb = 0
+    status_path = f"/proc/{pid}/status"
+    while not stop.is_set():
+        try:
+            with open(status_path) as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        kb = int(line.split()[1])
+                        if kb > peak_kb:
+                            peak_kb = kb
+                        break
+        except FileNotFoundError:
+            break  # process has exited
+        time.sleep(interval)
+    result.append(peak_kb)
 
 
-def _read_children_rss_kb() -> int:
-    return int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / _rss_scale())
+def _measure_peak_rss_kb(proc: subprocess.Popen, poll_interval: float = 0.1) -> int:
+    """Poll a running Popen process for peak RSS; return KB. Falls back to 0 on non-Linux."""
+    if platform.system() != "Linux":
+        proc.wait()
+        return 0
+    result: list = []
+    stop = threading.Event()
+    t = threading.Thread(target=_poll_rss_kb, args=(proc.pid, poll_interval, result, stop),
+                         daemon=True)
+    t.start()
+    proc.wait()
+    stop.set()
+    t.join()
+    return result[0] if result else 0
 
 
 def compute_throughput(n_reads: int, n_bases: int, wall_time_s: float) -> dict:
@@ -149,28 +182,30 @@ def run_one_standalone(
         "--workers", str(workers),
         "--out", out_csv,
     ]
-    rss_before = _read_children_rss_kb()
     t0 = time.perf_counter()
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        peak_rss_kb = _measure_peak_rss_kb(proc)  # waits for proc to finish
         wall_time = time.perf_counter() - t0
-        rss_after = _read_children_rss_kb()
-        peak_rss_kb = max(0, rss_after - rss_before)
+        stdout, stderr = proc.communicate()
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, cmd, stdout, stderr)
         return {
             "wall_time_s": round(wall_time, 3),
             "peak_rss_kb": peak_rss_kb,
             "peak_rss_mb": round(peak_rss_kb / 1024, 1),
-            "stderr": result.stderr,
+            "stderr": stderr,
             "status": "ok",
         }
     except subprocess.CalledProcessError as e:
         wall_time = time.perf_counter() - t0
+        stderr = e.stderr or ""
         return {
             "wall_time_s": round(wall_time, 3),
             "peak_rss_kb": 0,
             "peak_rss_mb": 0.0,
-            "stderr": e.stderr,
-            "status": f"error: {e.stderr[:120].strip()}",
+            "stderr": stderr,
+            "status": f"error: {stderr[:120].strip()}",
         }
 
 
@@ -190,6 +225,7 @@ def run_standalone(args) -> None:
     matrix = build_matrix(args.reads_list, args.bams_list, args.workers_list)
     total = len(matrix) * args.repeats
     print(f"Standalone benchmark: {total} run(s) across {len(matrix)} parameter combination(s)")
+    benchmark_start = time.perf_counter()
     if args.dry_run:
         for m in matrix:
             print(f"  reads={m['n_reads']:>9,}  n_bams={m['n_bams']}  workers={m['workers']}")
@@ -255,7 +291,8 @@ def run_standalone(args) -> None:
     if not args.keep_bams and args.out_dir is None:
         shutil.rmtree(bam_cache_dir, ignore_errors=True)
 
-    print("\n--- Summary ---")
+    total_elapsed = time.perf_counter() - benchmark_start
+    print(f"\n--- Summary (total elapsed: {total_elapsed:.1f}s) ---")
     print_summary_table(rows)
     write_results_csv(rows, args.results)
 
