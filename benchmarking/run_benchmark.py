@@ -107,7 +107,7 @@ def print_summary_table(rows: list) -> None:
 def write_results_csv(rows: list, path: str) -> None:
     if not rows:
         return
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
@@ -128,7 +128,8 @@ def build_matrix(reads_list, bams_list, workers_list) -> list:
 
 def ensure_subsampled_bam(source_bam: str, n_reads: int, out_dir: str, seed: int = 42) -> str:
     """Return path to a subsampled BAM, generating it if needed."""
-    from subsample_bam import subsample  # local import; both files are in benchmarking/
+    sys.path.insert(0, str(_HERE))
+    from subsample_bam import subsample
     out_path = os.path.join(out_dir, f"sub_{n_reads}_seed{seed}.bam")
     return subsample(source_bam, n_reads, out_path, seed=seed)
 
@@ -151,9 +152,7 @@ def run_one_standalone(
     rss_before = _read_children_rss_kb()
     t0 = time.perf_counter()
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, check=True
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         wall_time = time.perf_counter() - t0
         rss_after = _read_children_rss_kb()
         peak_rss_kb = max(0, rss_after - rss_before)
@@ -201,8 +200,8 @@ def run_standalone(args) -> None:
     for m in matrix:
         n_reads, n_bams, workers = m["n_reads"], m["n_bams"], m["workers"]
 
-        # Subsample the source BAM once per (n_reads, seed) combination
-        # For n_bams > 1 use different seeds to simulate distinct SMRT cells
+        # Subsample the source BAM once per (n_reads, seed) combination.
+        # For n_bams > 1 use different seeds to simulate distinct SMRT cells.
         print(f"\n[{run_idx+1}/{total}] reads={n_reads:,}  n_bams={n_bams}  workers={workers}")
         bam_paths = []
         for i in range(n_bams):
@@ -274,7 +273,6 @@ def run_snakemake_benchmark(args) -> None:
     work_dir = tempfile.mkdtemp(prefix="bench_snakemake_")
     print(f"Snakemake benchmark working directory: {work_dir}")
 
-    # Copy Snakefile, config, and the stats script into the temp dir
     shutil.copy(_DEFAULT_SNAKEFILE, work_dir)
     shutil.copy(_DEFAULT_CONFIG, work_dir)
     shutil.copy(_DEFAULT_SCRIPT, work_dir)
@@ -283,7 +281,7 @@ def run_snakemake_benchmark(args) -> None:
     cmd = [
         "snakemake",
         "--cores", str(args.cores),
-        "--config", f"manifest=manifest.tsv",
+        "--config", "manifest=manifest.tsv",
         "--nolock",
     ]
     if args.use_conda:
@@ -292,9 +290,7 @@ def run_snakemake_benchmark(args) -> None:
     print(f"Running: {' '.join(cmd)}")
     t0 = time.perf_counter()
     try:
-        result = subprocess.run(
-            cmd, cwd=work_dir, capture_output=True, text=True
-        )
+        result = subprocess.run(cmd, cwd=work_dir, capture_output=True, text=True)
         wall_time = time.perf_counter() - t0
         success = result.returncode == 0
     except FileNotFoundError:

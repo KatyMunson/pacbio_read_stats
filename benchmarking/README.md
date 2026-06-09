@@ -34,6 +34,26 @@ conda activate kinnex_stats
 
 ---
 
+## A note on UBAM vs. aligned BAM input
+
+The majority use case for this pipeline is **UBAM (unaligned BAM)** — files
+that come directly from PacBio CCS processing with no alignment step. In a
+UBAM every record is a primary read, so `subsample_bam.py`'s filter for
+secondary/supplementary alignments is a no-op (two bit-flag checks per read
+that are always false — negligible overhead compared to BGZF decompression).
+
+If you supply an **aligned BAM**, the subsampler skips secondary and
+supplementary alignment records and counts only primary alignments toward
+`--n`. This matches how `kinnex_stats_multicore.py` counts reads. The
+coordinate ordering of a sorted aligned BAM does not bias the sample —
+reservoir sampling guarantees each primary read has equal probability of
+selection regardless of stream order.
+
+In both cases, the `n_reported` value in the benchmark results CSV should
+equal `n_reads_subsample × n_bams`.
+
+---
+
 ## Quick Start
 
 ### Subsample a BAM manually
