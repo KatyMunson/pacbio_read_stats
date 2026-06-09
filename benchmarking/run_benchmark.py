@@ -301,6 +301,79 @@ def run_standalone(args) -> None:
 # Snakemake mode
 # ---------------------------------------------------------------------------
 
+def _parse_snakemake_log(log_path: str) -> dict:
+    """
+    Parse a Snakemake log file and return {sample: wall_time_s} for kinnex_stats jobs.
+
+    Snakemake logs timestamps before each rule block and before each "Finished job N."
+    line. We match job start (rule kinnex_stats + wildcards: sample=NAME) to finish
+    (Finished job N.) via the jobid field.
+    """
+    import re
+    from datetime import datetime
+
+    # Snakemake timestamp format: [Mon Jan  1 00:00:00 2026]
+    ts_re = re.compile(r'^\[(\w{3} \w{3}\s+\d+ \d+:\d+:\d+ \d{4})\]')
+    finished_re = re.compile(r'^Finished job (\d+)\.')
+
+    job_starts: dict = {}   # jobid -> (sample, datetime)
+    per_sample: dict = {}   # sample -> wall_time_s
+
+    current_ts = None
+    in_kinnex = False
+    cur_jobid = None
+    cur_sample = None
+
+    with open(log_path) as f:
+        for raw in f:
+            line = raw.strip()
+            m = ts_re.match(line)
+            if m:
+                current_ts = datetime.strptime(m.group(1), "%a %b %d %H:%M:%S %Y")
+                in_kinnex = False
+                cur_jobid = None
+                cur_sample = None
+                continue
+
+            if line == "rule kinnex_stats:":
+                in_kinnex = True
+                continue
+
+            if in_kinnex:
+                if line.startswith("jobid:"):
+                    cur_jobid = int(line.split(":", 1)[1].strip())
+                elif line.startswith("wildcards:") and "sample=" in line:
+                    # wildcards may have multiple fields: sample=X, other=Y
+                    for part in line.split("wildcards:", 1)[1].split(","):
+                        part = part.strip()
+                        if part.startswith("sample="):
+                            cur_sample = part.split("=", 1)[1].strip()
+                    if cur_jobid is not None and cur_sample is not None:
+                        job_starts[cur_jobid] = (cur_sample, current_ts)
+                continue
+
+            m2 = finished_re.match(line)
+            if m2 and current_ts is not None:
+                jobid = int(m2.group(1))
+                if jobid in job_starts:
+                    sample, start = job_starts.pop(jobid)
+                    per_sample[sample] = round((current_ts - start).total_seconds(), 1)
+
+    return per_sample
+
+
+def _find_snakemake_log(work_dir: str) -> str | None:
+    """Return path to the most recent Snakemake log file in work_dir."""
+    log_dir = os.path.join(work_dir, ".snakemake", "log")
+    if not os.path.isdir(log_dir):
+        return None
+    logs = sorted(
+        (os.path.join(log_dir, f) for f in os.listdir(log_dir) if f.endswith(".snakemake.log")),
+        key=os.path.getmtime,
+    )
+    return logs[-1] if logs else None
+
+
 def run_snakemake_benchmark(args) -> None:
     if not os.path.exists(args.manifest):
         sys.exit(f"Manifest not found: {args.manifest}")
@@ -331,34 +404,74 @@ def run_snakemake_benchmark(args) -> None:
     t0 = time.perf_counter()
     try:
         result = subprocess.run(cmd, cwd=work_dir, capture_output=True, text=True)
-        wall_time = time.perf_counter() - t0
+        total_wall = time.perf_counter() - t0
         success = result.returncode == 0
     except FileNotFoundError:
         sys.exit("snakemake not found. Install it or activate the project conda environment.")
 
-    final_csv = os.path.join(work_dir, "results", "kinnex_stats.csv")
-    n_samples = 0
-    if os.path.exists(final_csv):
-        with open(final_csv) as f:
-            n_samples = sum(1 for line in f) - 1  # subtract header
-
-    row = {
-        "mode": "snakemake",
-        "manifest": args.manifest,
-        "cores": args.cores,
-        "n_samples": n_samples,
-        "wall_time_s": round(wall_time, 3),
-        "wall_time_per_sample_s": round(wall_time / n_samples, 3) if n_samples else None,
-        "status": "ok" if success else f"error (rc={result.returncode})",
-    }
-
-    print(f"\nSnakemake finished in {wall_time:.1f}s  ({n_samples} samples)  [{row['status']}]")
+    overall_status = "ok" if success else f"error (rc={result.returncode})"
+    print(f"\nSnakemake finished in {total_wall:.1f}s  [{overall_status}]")
     if not success:
         print("--- stderr (last 40 lines) ---")
         for line in result.stderr.splitlines()[-40:]:
             print(" ", line)
 
-    write_results_csv([row], args.results)
+    # --- Per-sample timing from Snakemake log ---
+    per_sample_times: dict = {}
+    log_path = _find_snakemake_log(work_dir)
+    if log_path:
+        try:
+            per_sample_times = _parse_snakemake_log(log_path)
+        except Exception as e:
+            print(f"  Warning: could not parse Snakemake log for per-sample times: {e}")
+
+    # --- Per-sample read stats from output CSVs ---
+    per_sample_dir = os.path.join(work_dir, "results", "per_sample")
+    rows = []
+    if os.path.isdir(per_sample_dir):
+        for fname in sorted(os.listdir(per_sample_dir)):
+            if not fname.endswith(".stats.csv"):
+                continue
+            sample = fname.replace(".stats.csv", "")
+            stats = parse_result_csv(os.path.join(per_sample_dir, fname))
+            n_reads = int(stats.get("n", 0)) if stats else 0
+            n_bases = int(stats.get("n_bases", 0)) if stats else 0
+            wall_time = per_sample_times.get(sample)
+            throughput = compute_throughput(n_reads, n_bases, wall_time or 0)
+            rows.append({
+                "mode": "snakemake",
+                "sample": sample,
+                "n_reads": n_reads,
+                "n_bases": n_bases,
+                "wall_time_s": wall_time if wall_time is not None else "NA",
+                "reads_per_sec": throughput["reads_per_sec"] if wall_time else "NA",
+                "mbases_per_sec": throughput["mbases_per_sec"] if wall_time else "NA",
+                "status": "ok" if success else overall_status,
+            })
+
+    # Summary row
+    n_samples = len(rows)
+    rows.append({
+        "mode": "snakemake_total",
+        "sample": f"{n_samples} samples",
+        "n_reads": sum(int(r["n_reads"]) for r in rows if r["n_reads"] != "NA"),
+        "n_bases": sum(int(r["n_bases"]) for r in rows if r["n_bases"] != "NA"),
+        "wall_time_s": round(total_wall, 3),
+        "reads_per_sec": "",
+        "mbases_per_sec": "",
+        "status": overall_status,
+    })
+
+    # Print summary table
+    if rows:
+        cols = ["sample", "n_reads", "wall_time_s", "reads_per_sec", "mbases_per_sec", "status"]
+        widths = {c: max(len(c), max(len(str(r.get(c, ""))) for r in rows)) for c in cols}
+        print("  ".join(c.ljust(widths[c]) for c in cols))
+        print("  ".join("-" * widths[c] for c in cols))
+        for r in rows:
+            print("  ".join(str(r.get(c, "")).ljust(widths[c]) for c in cols))
+
+    write_results_csv(rows, args.results)
 
     if not args.keep_work_dir:
         shutil.rmtree(work_dir, ignore_errors=True)
