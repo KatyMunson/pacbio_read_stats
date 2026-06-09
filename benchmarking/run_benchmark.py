@@ -314,6 +314,9 @@ def run_snakemake_benchmark(args) -> None:
     shutil.copy(_DEFAULT_CONFIG, work_dir)
     shutil.copy(_DEFAULT_SCRIPT, work_dir)
     shutil.copy(args.manifest, os.path.join(work_dir, "manifest.tsv"))
+    envs_src = _HERE.parent / "envs"
+    if envs_src.exists():
+        shutil.copytree(str(envs_src), os.path.join(work_dir, "envs"))
 
     cmd = [
         "snakemake",
