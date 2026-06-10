@@ -151,8 +151,11 @@ as a floor.
 ### N50 computation cost
 
 The O(n log n) sort inside `n50_from_list` is visible at high read counts
-(≥1M). This CPU cost is bounded and predictable; it adds a few seconds even
-after BAM I/O completes.
+(≥1M) and becomes a meaningful fraction of total wall time above ~10M reads.
+At 24M reads it added roughly 50s on top of BAM streaming time, which lowers
+the apparent `reads_per_sec` figure even though streaming speed is unchanged.
+The `reads_per_sec` column is therefore an end-to-end throughput rate, not a
+pure I/O rate.
 
 ### Snakemake per-sample timing
 
@@ -230,8 +233,10 @@ NFS latency, or resource limits:
 
 | Scenario | Expected wall time |
 |----------|--------------------|
-| 10k reads, 1 BAM, 1 worker | < 30 seconds |
-| 100k reads, 1 BAM, 1 worker | < 5 minutes |
-| 1M reads, 1 BAM, 1 worker | < 30 minutes |
+| 10k reads, 1 BAM, 1 worker | < 10 seconds |
+| 100k reads, 1 BAM, 1 worker | < 30 seconds |
+| 1M reads, 1 BAM, 1 worker | < 2 minutes |
+| 10M reads, 1 BAM, 1 worker | < 10 minutes |
+| 25M reads, 1 BAM, 1 worker | < 15 minutes |
 | Memory per 1M total reads | ~170–290 MB RSS |
 | Speedup at n_bams=3, workers=3 vs workers=1 | 3×–11× (NFS: lower end; local SSD: higher end) |
