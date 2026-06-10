@@ -177,8 +177,8 @@ Use benchmark results as follows:
 
 ## Measured Results
 
-*Measured on the Eichler lab HPC cluster (login node), BAMs on NFS
-(`/net/eichler/...`). Results will vary with disk type, CPU, and concurrent
+*Measured on a lab HPC cluster (qlogin on a compute node), source BAMs on NFS
+and subsampled benchmark on local hard drive. Results will vary with disk type, CPU, and concurrent
 I/O load. NFS latency typically reduces throughput vs. local SSD.*
 
 ### Standalone script benchmark
