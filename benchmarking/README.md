@@ -97,9 +97,9 @@ python run_benchmark.py snakemake \
     --results snakemake_results.csv
 ```
 
-This copies the Snakefile and config into a temporary directory and runs
-`snakemake --cores N`, measuring end-to-end wall time including scheduler
-overhead.
+This copies the Snakefile and config into a temporary directory, runs
+`snakemake --cores N`, and reports per-sample wall time and throughput by
+parsing the Snakemake log alongside the per-sample output CSVs.
 
 ---
 
@@ -119,6 +119,11 @@ scratch space. Use `--out-dir` to direct scratch output to a partition with
 sufficient space. Skip the 1M-read tier with `--reads-list 10000 100000` if
 space is limited.
 
+> **Note on subsampling time:** reservoir sampling streams the entire source
+> BAM in a single pass regardless of how many reads are requested. Subsampling
+> time is proportional to source BAM size, not `--n`. Use `--keep-bams` and
+> `--out-dir` to cache subsampled BAMs across runs.
+
 ---
 
 ## How to Interpret Results
@@ -129,17 +134,19 @@ space is limited.
 sequentially, and multiple BAMs are read in parallel (one worker per BAM).
 Speedup saturates once `workers ≥ n_bams`. Increasing workers beyond
 `n_bams` has no effect because all files are already being read in parallel.
-On a shared HDD, contention between concurrent reads may reduce the benefit
-of parallelism; SSDs approach near-linear scaling.
+On NFS or shared HDD, contention between concurrent reads may reduce the
+benefit of parallelism; local SSDs approach near-linear scaling.
 
 ### Memory scaling
 
 Memory scales with **total reads across all BAMs**, not file size. The
 `process_sample` function pools all read lengths and qualities into Python
-lists in the parent process before computing statistics. Expect roughly
-100–200 MB RSS per 1 million reads. Setting `mem` in `config.yaml` too low
-causes SGE to kill jobs; the benchmark output's `peak_rss_mb` column gives
-the empirical value to use as a floor.
+lists in the parent process before computing statistics. Based on measured
+results, expect roughly **29 MB per 100k reads** (~290 MB/M reads) for a
+single BAM. With multiple BAMs the pooled total scales linearly with total
+read count. Setting `mem` in `config.yaml` too low causes SGE to kill jobs;
+the benchmark output's `peak_rss_mb` column gives the empirical value to use
+as a floor.
 
 ### N50 computation cost
 
@@ -147,12 +154,14 @@ The O(n log n) sort inside `n50_from_list` is visible at high read counts
 (≥1M). This CPU cost is bounded and predictable; it adds a few seconds even
 after BAM I/O completes.
 
-### Snakemake overhead
+### Snakemake per-sample timing
 
-Mode B adds Snakemake rule-scheduling overhead on top of per-sample compute
-time, typically 5–30 seconds for the scheduler itself. The `wall_time_per_sample_s`
-column in the Snakemake results CSV is the most useful number for estimating
-walltime limits for cluster submissions.
+The `snakemake` mode reports one row per sample with `wall_time_s` parsed
+from the Snakemake log (second-resolution timestamps). Because samples run
+in parallel up to `--cores`, the largest sample's `wall_time_s` determines
+the overall walltime limit needed for cluster submissions. The `snakemake_total`
+row shows the true end-to-end elapsed time including scheduler overhead
+(typically 5–30 seconds).
 
 ### Setting `config.yaml` resources
 
@@ -162,40 +171,57 @@ Use benchmark results as follows:
 |--------------------------|------------|
 | `threads` | Set to the **maximum number of BAMs any single sample has** — this matches the parallelism ceiling. Adding more threads beyond this wastes slot reservations. |
 | `mem` (GB per thread) | Round `peak_rss_mb / threads` up to the next whole GB, then add 20% headroom for OS overhead. |
-| `hrs` | Use the standalone benchmark wall time for your largest sample (most reads × most BAMs), then multiply by 1.5 as a safety buffer. |
+| `hrs` | Use the per-sample `wall_time_s` from the `snakemake` mode for your largest sample, then multiply by 1.5 as a safety buffer. |
 
 ---
 
-## Example Results
+## Measured Results
 
-Run the benchmark with your data and paste the output table here.
+*Measured on the Eichler lab HPC cluster (login node), BAMs on NFS
+(`/net/eichler/...`). Results will vary with disk type, CPU, and concurrent
+I/O load. NFS latency typically reduces throughput vs. local SSD.*
 
-```bash
-python run_benchmark.py standalone \
-    --bam /path/to/sample.flnc.bam \
-    --results full_results.csv
-cat full_results.csv
-```
+### Standalone script benchmark
 
-Replace the placeholder table below with your measured values.
+Subsampled from a single real Kinnex FLNC UBAM; multiple-BAM runs use
+independently seeded subsamples to simulate distinct SMRT cells.
 
-| reads_per_bam | n_bams | workers | wall_time_s | peak_rss_mb | reads_per_sec | mbases_per_sec |
-|---------------|--------|---------|-------------|-------------|---------------|----------------|
-| 10,000        | 1      | 1       | TBD         | TBD         | TBD           | TBD            |
-| 10,000        | 1      | 4       | TBD         | TBD         | TBD           | TBD            |
-| 10,000        | 3      | 1       | TBD         | TBD         | TBD           | TBD            |
-| 10,000        | 3      | 4       | TBD         | TBD         | TBD           | TBD            |
-| 100,000       | 1      | 1       | TBD         | TBD         | TBD           | TBD            |
-| 100,000       | 3      | 1       | TBD         | TBD         | TBD           | TBD            |
-| 100,000       | 3      | 4       | TBD         | TBD         | TBD           | TBD            |
-| 100,000       | 6      | 4       | TBD         | TBD         | TBD           | TBD            |
-| 1,000,000     | 1      | 1       | TBD         | TBD         | TBD           | TBD            |
-| 1,000,000     | 3      | 4       | TBD         | TBD         | TBD           | TBD            |
-| 1,000,000     | 6      | 4       | TBD         | TBD         | TBD           | TBD            |
-| 1,000,000     | 6      | 8       | TBD         | TBD         | TBD           | TBD            |
+| reads/BAM | n_bams | workers | wall_time_s | peak_rss_mb | reads_per_sec | Mbases_per_sec |
+|-----------|--------|---------|-------------|-------------|---------------|----------------|
+| 10,000    | 1      | 1       | 0.80        | 19.5        | 12,453        | 23.2           |
+| 10,000    | 1      | 4       | 0.30        | 18.6        | 33,223        | 62.0           |
+| 10,000    | 3      | 1       | 3.31        | 18.4        | 9,061         | 16.9           |
+| 10,000    | 3      | 4       | 0.30        | 20.8        | 99,668        | 185.4          |
+| 100,000   | 1      | 1       | 1.50        | 29.0        | 66,489        | 123.2          |
+| 100,000   | 1      | 4       | 1.30        | 28.3        | 76,746        | 142.2          |
+| 100,000   | 3      | 1       | 3.61        | 50.9        | 83,195        | 154.2          |
+| 100,000   | 3      | 4       | 1.50        | 51.0        | 199,601       | 370.0          |
 
-*Measured on: [hardware description — CPU model, RAM, disk type (HDD/SSD/NFS)].
-Results will vary with disk type, CPU speed, and concurrent I/O load.*
+Key observations:
+- **Workers help most when `n_bams > 1`:** 3 BAMs × 4 workers is ~11× faster than 3 BAMs × 1 worker at 10k reads
+- **Per-BAM startup cost** (~0.8s fixed overhead for pysam open + process fork) dominates at small read counts
+- **Memory scales with total reads:** 100k × 3 BAMs → 51 MB ≈ 3× the single-BAM value (170 MB/M reads)
+
+### Full pipeline benchmark (Snakemake)
+
+Run against 4 real 1KG Kinnex samples with `--cores 8` (all 4 samples ran in parallel).
+
+| sample      | n_reads    | wall_time_s | reads_per_sec | Mbases_per_sec |
+|-------------|------------|-------------|---------------|----------------|
+| CHM13-W-0   | 23,713,188 | 317         | 74,805        | 167.4          |
+| GM07037-W-0 | 10,127,275 | 113         | 89,622        | 166.1          |
+| GM11930-J-0 | 16,127,891 | 177         | 91,118        | 161.2          |
+| GM11933-J-0 | 10,084,807 | 107         | 94,251        | 158.4          |
+| **Total**   | 60,053,161 | 512 (wall)  |               |                |
+
+Key observations:
+- CHM13 has lower throughput (74k vs. 89–94k reads/s) likely due to more BAMs per sample
+  causing more parallel NFS I/O contention when competing with the other three concurrent jobs
+- All 4 samples ran simultaneously; total wall time (512s) ≈ CHM13's individual time (317s)
+  plus ~200s Snakemake overhead and job scheduling on the shared node
+- **For `config.yaml` on this cluster:** `hrs: 6` is very conservative; CHM13 at 317s
+  with 1.5× buffer suggests `hrs: 1` is sufficient. `mem` should be validated against your
+  largest sample's read count (see memory scaling above)
 
 ### Sanity-check bounds
 
@@ -207,5 +233,5 @@ NFS latency, or resource limits:
 | 10k reads, 1 BAM, 1 worker | < 30 seconds |
 | 100k reads, 1 BAM, 1 worker | < 5 minutes |
 | 1M reads, 1 BAM, 1 worker | < 30 minutes |
-| Memory per 1M total reads | < 500 MB RSS |
-| Speedup at n_bams=6, workers=6 vs workers=1 | 2×–6× (HDD: lower end; SSD: higher end) |
+| Memory per 1M total reads | ~170–290 MB RSS |
+| Speedup at n_bams=3, workers=3 vs workers=1 | 3×–11× (NFS: lower end; local SSD: higher end) |

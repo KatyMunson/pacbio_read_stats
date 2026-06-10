@@ -120,7 +120,7 @@ and choose appropriate `config.yaml` resource settings.
 | `config.yaml` parameter | Guidance |
 |--------------------------|---------|
 | `threads` | Set to the maximum number of BAMs any single sample has — parallelism saturates there |
-| `mem` (GB per thread) | ~200 MB per million reads ÷ threads, rounded up to next GB, with 20% headroom |
+| `mem` (GB per thread) | ~170–290 MB per million reads ÷ threads, rounded up to next GB, with 20% headroom |
 | `hrs` | Measure your largest sample with the benchmark, then multiply by 1.5 |
 
 See [`benchmarking/README.md`](benchmarking/README.md) for full instructions,
