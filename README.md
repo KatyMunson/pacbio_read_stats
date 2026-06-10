@@ -110,6 +110,22 @@ snakemake -n
 
 Edit `manifest.tsv` to add new rows, then rerun. Snakemake will only process the new samples; existing per-sample CSVs are reused and the final table is regenerated.
 
+## Performance & Benchmarking
+
+The `benchmarking/` folder contains tools to measure runtime on your own data
+and choose appropriate `config.yaml` resource settings.
+
+**Quick rules of thumb** (refine with the benchmarking toolkit):
+
+| `config.yaml` parameter | Guidance |
+|--------------------------|---------|
+| `threads` | Set to the maximum number of BAMs any single sample has — parallelism saturates there |
+| `mem` (GB per thread) | ~170–290 MB per million reads ÷ threads, rounded up to next GB, with 20% headroom |
+| `hrs` | Measure your largest sample with the benchmark, then multiply by 1.5 |
+
+See [`benchmarking/README.md`](benchmarking/README.md) for full instructions,
+a parameter-sweep benchmark script, and an example results table.
+
 ## File structure
 
 ```
@@ -120,6 +136,10 @@ Edit `manifest.tsv` to add new rows, then rerun. Snakemake will only process the
 ├── kinnex_stats_multicore.py   # per-sample stats script
 ├── envs/
 │   └── kinnex_stats.yaml       # conda environment
+├── benchmarking/
+│   ├── subsample_bam.py        # subsample N reads from a real BAM
+│   ├── run_benchmark.py        # timing + memory benchmark harness
+│   └── README.md               # benchmarking guide and results table
 └── results/
     ├── kinnex_stats.csv         # final merged output
     ├── per_sample/
